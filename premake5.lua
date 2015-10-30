@@ -27,6 +27,7 @@ Reference for warnings:
  4702 - unreachable code
  4706 - assignment within conditional expression
  4800 - forcing value to bool (performance warning)
+ 4819 - The file contains a character that cannot be represented in the current code page
  4838 - conversion from X to Y requires a narrowing conversion
  4996 - POSIX name deprecated
 
@@ -46,6 +47,7 @@ workspace "SumatraPDF"
   filter "platforms:x32"
      architecture "x86"
      toolset "v140_xp"
+     buildoptions { "/arch:IA32" } -- disable the default /arch:SSE2 for 32-bit builds
      filter "action:vs2013"
       toolset "v120_xp"
   filter {}
@@ -54,7 +56,7 @@ workspace "SumatraPDF"
      architecture "x86_64"
      toolset "v140_xp"
      filter "action:vs2013"
-      toolset "v120"
+      toolset "v120_xp"
   filter {}
 
   disablewarnings { "4127", "4324", "4458", "4800" }
@@ -170,7 +172,7 @@ workspace "SumatraPDF"
   project "openjpeg"
     kind "StaticLib"
     language "C"
-    disablewarnings { "4100", "4244" }
+    disablewarnings { "4100", "4244", "4819" }
     includedirs { "ext/openjpeg" }
     openjpeg_files()
 
@@ -232,7 +234,7 @@ workspace "SumatraPDF"
   project "engines"
     kind "StaticLib"
     language "C++"
-    disablewarnings { "4018", "4057", "4189", "4244", "4267", "4295" }
+    disablewarnings { "4018", "4057", "4189", "4244", "4267", "4295", "4819" }
     disablewarnings { "4701", "4706", "4838"  }
     includedirs { "src/utils", "src/wingui", "src/mui" }
     includedirs { "ext/synctex", "ext/libdjvu", "ext/CHMLib/src", "ext/zlib", "mupdf/include" }
