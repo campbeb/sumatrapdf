@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -170,6 +171,14 @@ func removeDirMust(dir string) {
 	fataliferr(err)
 }
 
+func removeFileMust(path string) {
+	if !fileExists(path) {
+		return
+	}
+	err := os.Remove(path)
+	fataliferr(err)
+}
+
 // Version must be in format x.y.z
 func verifyCorrectVersionMust(ver string) {
 	parts := strings.Split(ver, ".")
@@ -187,6 +196,20 @@ func getGitSha1Must() string {
 	return s
 }
 
+func dataSha1Hex(d []byte) string {
+	sha1 := sha1.Sum(d)
+	return fmt.Sprintf("%x", sha1[:])
+}
+
+func fileSha1Hex(path string) (string, error) {
+	d, err := ioutil.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sha1 := sha1.Sum(d)
+	return fmt.Sprintf("%x", sha1[:]), nil
+}
+
 func httpDlMust(uri string) []byte {
 	res, err := http.Get(uri)
 	fataliferr(err)
@@ -194,4 +217,19 @@ func httpDlMust(uri string) []byte {
 	res.Body.Close()
 	fataliferr(err)
 	return d
+}
+
+func httpDlToFileMust(uri string, path string, sha1Hex string) {
+	if fileExists(path) {
+		sha1File, err := fileSha1Hex(path)
+		fataliferr(err)
+		fatalif(sha1File != sha1Hex, "file '%s' exists but has sha1 of %s and we expected %s", path, sha1File, sha1Hex)
+		return
+	}
+	fmt.Printf("Downloading '%s'\n", uri)
+	d := httpDlMust(uri)
+	sha1File := dataSha1Hex(d)
+	fatalif(sha1File != sha1Hex, "downloaded '%s' but it has sha1 of %s and we expected %s", uri, sha1File, sha1Hex)
+	err := ioutil.WriteFile(path, d, 0755)
+	fataliferr(err)
 }

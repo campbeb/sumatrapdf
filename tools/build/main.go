@@ -23,7 +23,7 @@ To run:
  - restart so that PATH changes take place
  - set GOPATH env variable (e.g. to %USERPROFILE%\src\go)
  - install goamz: go get github.com/goamz/goamz/s3
-* see .\scripts\build-release.bat for how to run it
+* see scripts\build-release.bat for how to run it
 */
 
 /*
@@ -199,26 +199,67 @@ func addZipFileMust(w *zip.Writer, path string) {
 	fih, err := zip.FileInfoHeader(fi)
 	fataliferr(err)
 	fih.Name = filepath.Base(path)
+	fih.Method = zip.Deflate
 	d, err := ioutil.ReadFile(path)
 	fataliferr(err)
-	f, err := w.CreateHeader(fih)
+	fw, err := w.CreateHeader(fih)
 	fataliferr(err)
-	_, err = f.Write(d)
+	_, err = fw.Write(d)
 	fataliferr(err)
-	// no need to close f. It's implicitly closed by the next Create(), CreateHeader() or Close() call
+	// fw is just a io.Writer so we can't Close() it. It's not necessary as
+	// it's implicitly closed by the next Create(), CreateHeader()
+	// or Close() call on zip.Writer
 }
 
-func createExeZipMust(dir string) {
+func createExeZipWithGoMust(dir string) {
 	path := pj(dir, "SumatraPDF.zip")
 	f, err := os.Create(path)
 	fataliferr(err)
 	defer f.Close()
-	w := zip.NewWriter(f)
-
-	addZipFileMust(w, pj(dir, "SumatraPDF.exe"))
-
-	err = w.Close()
+	zw := zip.NewWriter(f)
+	addZipFileMust(zw, pj(dir, "SumatraPDF.exe"))
+	err = zw.Close()
 	fataliferr(err)
+}
+
+func createExeZipWithPigz(dir string) {
+	srcFile := "SumatraPDF.exe"
+	srcPath := filepath.Join(dir, srcFile)
+	fatalif(!fileExists(srcPath), "file '%s' doesn't exist\n", srcPath)
+
+	// this is the file that pigz.exe will create
+	dstFileTmp := "SumatraPDF.exe.zip"
+	dstPathTmp := filepath.Join(dir, dstFileTmp)
+	removeFileMust(dstPathTmp)
+
+	// this is the file we want at the end
+	dstFile := "SumatraPDF.zip"
+	dstPath := filepath.Join(dir, dstFile)
+	removeFileMust(dstPath)
+
+	wd, err := os.Getwd()
+	fataliferr(err)
+	pigzExePath := filepath.Join(wd, "bin", "pigz.exe")
+	fatalif(!fileExists(pigzExePath), "file '%s' doesn't exist\n", pigzExePath)
+	cmd := exec.Command(pigzExePath, "-11", "--keep", "--zip", srcFile)
+	// in pigz we don't control the name of the file created inside so
+	// so when we run pigz the current directory is the same as
+	// the directory with the file we're compressing
+	cmd.Dir = dir
+	fmt.Printf("Running %s\n", cmd.Args)
+	_, err = runCmd(cmd, true)
+	fataliferr(err)
+
+	fatalif(!fileExists(dstPathTmp), "file '%s' doesn't exist\n", dstPathTmp)
+	err = os.Rename(dstPathTmp, dstPath)
+	fataliferr(err)
+}
+
+// createExeZipWithGoMust() is faster, createExeZipWithPigz() generates slightly
+// smaller files
+func createExeZipMust(dir string) {
+	//createExeZipWithGoMust(dir)
+	createExeZipWithPigz(dir)
 }
 
 func createPdbZipMust(dir string) {
@@ -261,6 +302,8 @@ func buildPreRelease() {
 
 	verifyTranslationsMust()
 
+	downloadPigzMust()
+
 	setBuildConfig(gitSha1, svnPreReleaseVer)
 	err = runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:SumatraPDF;SumatraPDF-no-MUPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=Win32", "/m")
 	fataliferr(err)
@@ -292,8 +335,15 @@ func buildPreRelease() {
 	createPdbLzsaMust("rel64")
 
 	createManifestMust()
-	s3DeleteOldestPreRel()
 	s3UploadPreReleaseMust(svnPreReleaseVer)
+}
+
+// TOOD: alternatively, just puts pigz.exe in the repo
+func downloadPigzMust() {
+	uri := "https://kjkpub.s3.amazonaws.com/software/pigz/2.3.1-149/pigz.exe"
+	path := pj("bin", "pigz.exe")
+	sha1 := "10a2d3e3cafbad083972d6498fee4dc7df603c04"
+	httpDlToFileMust(uri, path, sha1)
 }
 
 func buildRelease() {
@@ -305,6 +355,8 @@ func buildRelease() {
 	verifyReleaseNotInS3Must(sumatraVersion)
 
 	verifyTranslationsMust()
+
+	downloadPigzMust()
 
 	setBuildConfig(gitSha1, "")
 	err = runMsbuild(true, "vs2015\\SumatraPDF.sln", "/t:SumatraPDF;SumatraPDF-no-MUPDF;Uninstaller;test_util", "/p:Configuration=Release;Platform=Win32", "/m")
@@ -446,7 +498,7 @@ func createSumatraLatestJs() string {
 
 		var sumLatestExe64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64.exe";
 		var sumLatestPdb64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64.pdb.zip";
-		var sumLatestInstaller64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-install-64.exe";
+		var sumLatestInstaller64 = "https://kjkpub.s3.amazonaws.com/sumatrapdf/prerel/SumatraPDF-prerelease-%s-64-install.exe";
 `, v, currDate, v, v, v, v, v, v, v)
 }
 
@@ -612,6 +664,8 @@ func s3UploadPreReleaseMust(ver string) {
 		return
 	}
 
+	s3DeleteOldestPreRel()
+
 	prefix := fmt.Sprintf("SumatraPDF-prerelease-%s", ver)
 	manifestRemotePath := s3PreRelDir + prefix + "-manifest.txt"
 	files := []string{
@@ -672,7 +726,8 @@ func getCurrentBranch(d []byte) string {
 }
 
 // When doing a release build, it must be from from a branch rel${ver}working
-// e.g. rel3.1working, where ${ver} must much sumatraVersion
+// e.g. rel3.1working, where ${ver} must match first 2 digits in sumatraVersion
+// i.e. we allow 3.1.1 and 3.1.2 from branch 3.1 but not from 3.0 or 3.2
 func verifyOnReleaseBranchMust() {
 	// 'git branch' return branch name in format: '* master'
 	out := runExeMust("git", "branch")
@@ -684,7 +739,8 @@ func verifyOnReleaseBranchMust() {
 
 	ver := currBranch[len(pref):]
 	ver = ver[:len(ver)-len(suff)]
-	fatalif(ver != sumatraVersion, "version mismatch, sumatra: '%s', branch: '%s'\n", sumatraVersion, ver)
+
+	fatalif(!strings.HasPrefix(sumatraVersion, ver), "version mismatch, sumatra: '%s', branch: '%s'\n", sumatraVersion, ver)
 }
 
 func verifyOnMasterBranchMust() {
@@ -832,6 +888,11 @@ func init() {
 func main() {
 	//testBuildLzsa()
 	//testS3Upload()
+
+	if false {
+		err := os.Chdir(pj("..", "sumatrapdf-3.1"))
+		fataliferr(err)
+	}
 
 	if false {
 		detectVersions()
