@@ -73,7 +73,7 @@ static void OnVScroll(WindowInfo& win, WPARAM wParam)
     GetScrollInfo(win.hwndCanvas, SB_VERT, &si);
 
     int iVertPos = si.nPos;
-    int lineHeight = 16;
+    int lineHeight = DpiScaleY(win.hwndCanvas, 16);
     if (!IsContinuous(win.ctrl->GetDisplayMode()) && ZOOM_FIT_PAGE == win.ctrl->GetZoomVirtual())
         lineHeight = 1;
 
@@ -116,8 +116,8 @@ static void OnHScroll(WindowInfo& win, WPARAM wParam)
     switch (message) {
     case SB_LEFT:       si.nPos = si.nMin; break;
     case SB_RIGHT:      si.nPos = si.nMax; break;
-    case SB_LINELEFT:   si.nPos -= 16; break;
-    case SB_LINERIGHT:  si.nPos += 16; break;
+    case SB_LINELEFT:   si.nPos -= DpiScaleX(win.hwndCanvas, 16); break;
+    case SB_LINERIGHT:  si.nPos += DpiScaleX(win.hwndCanvas, 16); break;
     case SB_PAGELEFT:   si.nPos -= si.nPage; break;
     case SB_PAGERIGHT:  si.nPos += si.nPage; break;
     case SB_THUMBTRACK: si.nPos = si.nTrackPos; break;
@@ -823,6 +823,13 @@ static LRESULT CanvasOnMouseWheel(WindowInfo& win, UINT message, WPARAM wParam, 
             win.AsFixed()->ScrollYBy(-MulDiv(si.nPage, delta, WHEEL_DELTA), true);
         return 0;
     }
+    
+   // added: shift while scrolling will scroll by half a page per tick
+   //        really usefull for browsing long files
+	if ((LOWORD(wParam) & MK_SHIFT) || IsShiftPressed()) {
+		SendMessage(win.hwndCanvas, WM_VSCROLL, (delta>0) ? SB_HPAGEUP : SB_HPAGEDOWN, 0);
+		return 0;
+	}
 
     win.wheelAccumDelta += delta;
     int currentScrollPos = GetScrollPos(win.hwndCanvas, SB_VERT);

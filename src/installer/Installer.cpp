@@ -142,34 +142,52 @@ void SetMsg(const WCHAR *msg, Color color)
 
 #define TEN_SECONDS_IN_MS 10*1000
 
-// Kill a process with given <processId> if it's loaded from <processPath>.
-// If <waitUntilTerminated> is TRUE, will wait until process is fully killed.
-// Returns TRUE if killed a process
-static BOOL KillProcIdWithName(DWORD processId, const WCHAR *processPath, BOOL waitUntilTerminated)
+static bool IsProcWithName(DWORD processId, const WCHAR *modulePath)
 {
-    ScopedHandle hProcess(OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_TERMINATE, FALSE, processId));
     ScopedHandle hModSnapshot(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processId));
-    if (!hProcess || INVALID_HANDLE_VALUE == hModSnapshot)
-        return FALSE;
+    if (!hModSnapshot.IsValid())
+        return false;
 
-    MODULEENTRY32 me32;
+    MODULEENTRY32W me32 = { 0 };
     me32.dwSize = sizeof(me32);
-    if (!Module32First(hModSnapshot, &me32))
-        return FALSE;
-    if (!path::IsSame(processPath, me32.szExePath))
-        return FALSE;
+    BOOL ok = Module32FirstW(hModSnapshot, &me32);
+    while (ok) {
+        if (path::IsSame(modulePath, me32.szExePath))
+            return true;
+        ok = Module32NextW(hModSnapshot, &me32);
+    }
+    return false;
+}
+
+// Kill a process with given <processId> if it has a module (dll or exe) <modulePath>.
+// If <waitUntilTerminated> is true, will wait until process is fully killed.
+// Returns TRUE if killed a process
+static bool KillProcIdWithName(DWORD processId, const WCHAR *modulePath, bool waitUntilTerminated)
+{
+    if (!IsProcWithName(processId, modulePath))
+        return false;
+
+    BOOL inheritHandle = FALSE;
+    // Note: do I need PROCESS_QUERY_INFORMATION and PROCESS_VM_READ?
+    DWORD dwAccess = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_TERMINATE;
+    ScopedHandle hProcess(OpenProcess(dwAccess, inheritHandle, processId));
+    if (!hProcess.IsValid())
+        return false;
 
     BOOL killed = TerminateProcess(hProcess, 0);
     if (!killed)
-        return FALSE;
+        return false;
 
     if (waitUntilTerminated)
         WaitForSingleObject(hProcess, TEN_SECONDS_IN_MS);
 
-    return TRUE;
+    return  true;
 }
 
-int KillProcess(const WCHAR *processPath, BOOL waitUntilTerminated)
+// returns number of killed processes that have a module (exe or dll) with a given
+// modulePath
+// returns -1 on error, 0 if no matching processes
+int KillProcess(const WCHAR *modulePath, bool waitUntilTerminated)
 {
     ScopedHandle hProcSnapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
     if (INVALID_HANDLE_VALUE == hProcSnapshot)
@@ -182,7 +200,7 @@ int KillProcess(const WCHAR *processPath, BOOL waitUntilTerminated)
 
     int killCount = 0;
     do {
-        if (KillProcIdWithName(pe32.th32ProcessID, processPath, waitUntilTerminated))
+        if (KillProcIdWithName(pe32.th32ProcessID, modulePath, waitUntilTerminated))
             killCount++;
     } while (Process32Next(hProcSnapshot, &pe32));
 
@@ -204,8 +222,8 @@ const WCHAR *GetOwnPath()
 
 static WCHAR *GetInstallationDir()
 {
-    ScopedMem<WCHAR> dir(ReadRegStr(HKEY_CURRENT_USER, REG_PATH_UNINST, INSTALL_LOCATION));
-    if (!dir) dir.Set(ReadRegStr(HKEY_LOCAL_MACHINE, REG_PATH_UNINST, INSTALL_LOCATION));
+    ScopedMem<WCHAR> dir(ReadRegStr(HKEY_CURRENT_USER, REG_PATH_UNINST, L"InstallLocation"));
+    if (!dir) dir.Set(ReadRegStr(HKEY_LOCAL_MACHINE, REG_PATH_UNINST, L"InstallLocation"));
     if (dir) {
         if (str::EndsWithI(dir, L".exe")) {
             dir.Set(path::GetDir(dir));
@@ -244,9 +262,9 @@ static WCHAR *GetBrowserPluginPath()
 
 WCHAR *GetInstalledBrowserPluginPath()
 {
-    WCHAR *path = ReadRegStr(HKEY_LOCAL_MACHINE, REG_PATH_PLUGIN, PLUGIN_PATH);
+    WCHAR *path = ReadRegStr(HKEY_LOCAL_MACHINE, REG_PATH_PLUGIN, L"Path");
     if (!path)
-        path = ReadRegStr(HKEY_CURRENT_USER, REG_PATH_PLUGIN, PLUGIN_PATH);
+        path = ReadRegStr(HKEY_CURRENT_USER, REG_PATH_PLUGIN, L"Path");
     return path;
 }
 
@@ -273,7 +291,7 @@ WCHAR *GetShortcutPath(bool allUsers)
 void KillSumatra()
 {
     ScopedMem<WCHAR> exePath(GetInstalledExePath());
-    KillProcess(exePath, TRUE);
+    KillProcess(exePath, true);
 }
 
 #if 1
